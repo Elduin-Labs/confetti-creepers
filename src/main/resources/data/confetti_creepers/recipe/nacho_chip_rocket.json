@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:firework_rocket",
+    "minecraft:bread",
+    "minecraft:orange_dye"
+  ],
+  "result": {
+    "id": "confetti_creepers:nacho_chip_rocket"
+  }
+}

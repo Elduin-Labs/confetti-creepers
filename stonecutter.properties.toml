@@ -1,0 +1,37 @@
+loomx.loom_version="1.16-SNAPSHOT"
+
+
+mod.id = "confetti_creepers"
+mod.name = "Confetti Creepers"
+mod.group = "com.elduin"
+mod.version = "1.0.0"
+mod.channel_tag = ""
+mod.description = "Creepers explode into confetti instead of blowing stuff up, call you on the Minecraft World Wi-Fi, and turn you into Confetti Guy."
+mod.authors = ["Elduin"]
+mod.contributors = []
+mod.inception_year = "2026"
+mod.license.name = "MIT"
+mod.license.url = "https://opensource.org/licenses/MIT"
+mod.license.dist = "repo"
+mod.sources_url = "https://github.com/Elduin-Labs/confetti-creepers"
+mod.homepage_url = "https://github.com/Elduin-Labs/confetti-creepers"
+mod.issues_url = "https://github.com/Elduin-Labs/confetti-creepers/issues"
+mod.discord_url = ""
+mod.environment = "client_and_server"
+[[mod.pom.developers]]
+id = "elduin"
+name = "Elduin"
+url = "https://github.com/ghost"
+
+[fabric]
+deps.fabric-loader = "0.19.3"
+
+[fabric."1.21.11"]
+deps.minecraft = "1.21.11"
+deps.fabric-api = "0.141.6+1.21.11"
+deps.modmenu = "17.0.1-beta.1"
+
+[fabric."26.2"]
+deps.minecraft = "26.2"
+deps.fabric-api = "0.158.0+26.2"
+deps.modmenu = "20.0.1"

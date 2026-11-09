@@ -1,0 +1,149 @@
+# Two ways in:
+#
+#  1. Push a version tag (v1.0.0) -> builds every Minecraft version, attaches
+#     every jar to one GitHub Release, and publishes each to Modrinth.
+#  2. Run "Release" manually from the Actions tab -> preflight only. Checks the
+#     Modrinth credentials and project id and publishes nothing. Use this after
+#     rotating a token, or before the first real release.
+#
+# Credentials:
+#   secrets.MODRINTH_TOKEN     - organization secret, inherited by every repo
+#   vars.MODRINTH_PROJECT_ID   - per-repo variable, set once per mod:
+#     gh variable set MODRINTH_PROJECT_ID --repo Elduin-Labs/<repo> --body "<id>"
+#
+# No personal access key is needed on anyone's machine. Creating the Modrinth
+# *project* the first time does need one - see the share-it skill.
+#
+# Stonecutter names its subprojects <mcversion>-fabric, so jars come out of
+# versions/<mcversion>-fabric/build/libs/. The matrix below must stay in sync
+# with the version list in settings.gradle.kts.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Modrinth credentials and project are usable
+        env:
+          TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PID: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          fail=0
+          [ -z "$TOKEN" ] && { echo "::error::MODRINTH_TOKEN is empty (org secret missing)"; fail=1; }
+          [ -z "$PID" ] && { echo "::error::MODRINTH_PROJECT_ID is empty — the mod has no Modrinth project yet"; fail=1; }
+          [ "$fail" = 1 ] && exit 1
+          code=$(curl -s -o /tmp/u.json -w '%{http_code}' -H "Authorization: $TOKEN" \
+                 -A 'Elduin-Labs/release-preflight' https://api.modrinth.com/v2/user)
+          [ "$code" != "200" ] && { echo "::error::Token rejected by Modrinth (HTTP $code)"; exit 1; }
+          echo "Token authenticates as: $(python3 -c 'import json;print(json.load(open("/tmp/u.json"))["username"])')"
+          # One-way fingerprint, so we can tell WHICH token CI uses without revealing it.
+          echo "Token fingerprint: $(printf '%s' "$TOKEN" | shasum -a 256 | cut -c1-12)"
+          code=$(curl -s -o /tmp/p.json -w '%{http_code}' -H "Authorization: $TOKEN" \
+                 -A 'Elduin-Labs/release-preflight' "https://api.modrinth.com/v2/project/$PID")
+          [ "$code" != "200" ] && { echo "::error::Project $PID not found (HTTP $code)"; exit 1; }
+          python3 - <<'PY'
+          import json
+          p = json.load(open("/tmp/p.json"))
+          print(f"Project: {p['title']} ({p['slug']})  status={p['status']}")
+          PY
+          echo "Preflight OK - a version tag will publish to Modrinth."
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"      # 25 runs Gradle for every version; toolchains pick 21 where needed
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build every version
+        run: ./gradlew build --stacktrace
+        env:
+          MOD_IS_RELEASE: "true"   # without this every jar is stamped -SNAPSHOT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: versions/*/build/libs/*.jar
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # KEEP IN SYNC with settings.gradle.kts.
+        include:
+          - minecraft: "1.21.11"
+            java: "21"
+          - minecraft: "26.2"
+            java: "25"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: jars
+          path: versions
+
+      - name: Version number from the tag (v1.0.1 -> 1.0.1)
+        id: v
+        run: echo "num=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Find the jar for ${{ matrix.minecraft }}
+        id: jar
+        run: |
+          jar=$(ls versions/${{ matrix.minecraft }}-fabric/build/libs/*.jar \
+                | grep -Ev -- '-(sources|javadoc|dev|shadow)\.jar$' | head -1)
+          [ -z "$jar" ] && { echo "::error::no jar for ${{ matrix.minecraft }}"; exit 1; }
+          echo "path=$jar" >> "$GITHUB_OUTPUT"
+
+      - name: Attach it to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.jar.outputs.path }}
+          body_path: CHANGELOG.md
+
+      - name: Can we publish to Modrinth?
+        id: check
+        run: |
+          if [ -n "${{ vars.MODRINTH_PROJECT_ID }}" ] && [ -n "${{ secrets.MODRINTH_TOKEN }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No MODRINTH_PROJECT_ID or MODRINTH_TOKEN - jars are on the GitHub Release only."
+          fi
+
+      - name: Publish ${{ matrix.minecraft }} to Modrinth
+        if: steps.check.outputs.ready == 'true'
+        uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: ${{ steps.jar.outputs.path }}
+          name: ${{ steps.v.outputs.num }} for ${{ matrix.minecraft }}
+          version: ${{ steps.v.outputs.num }}+mc${{ matrix.minecraft }}
+          version-type: release
+          changelog-file: CHANGELOG.md
+          game-versions: ${{ matrix.minecraft }}
+          game-version-filter: none
+          loaders: fabric
+          java: ${{ matrix.java }}
+          # Explicit, so a manifest change can never silently drop the dependency.
+          # P7dR8mSH is Fabric API on Modrinth.
+          modrinth-dependencies: |
+            P7dR8mSH(required)
+          retry-attempts: 2
+          fail-mode: fail
